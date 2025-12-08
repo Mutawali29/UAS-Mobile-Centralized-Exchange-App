@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../models/transaction.dart';
+import '../services/transaction_service.dart';
 import '../widgets/transaction_item.dart';
 import '../widgets/bottom_nav_bar.dart';
 import '../utils/app_colors.dart';
@@ -19,111 +21,16 @@ class _ActivityScreenState extends State<ActivityScreen>
     with SingleTickerProviderStateMixin {
   int _currentIndex = 1;
   late TabController _tabController;
-
-  // Sample transaction data
-  final List<Transaction> _allTransactions = [
-    Transaction(
-      id: '1',
-      type: TransactionType.receive,
-      status: TransactionStatus.completed,
-      cryptoSymbol: 'BTC',
-      cryptoName: 'Bitcoin',
-      amount: 0.0245,
-      valueUSD: 2021.45,
-      timestamp: DateTime.now().subtract(const Duration(hours: 2)),
-      fromAddress: '0x742d35Cc6634C0532925a3b8',
-      transactionHash: '0xabc123...',
-      fee: 0.0001,
-    ),
-    Transaction(
-      id: '2',
-      type: TransactionType.send,
-      status: TransactionStatus.completed,
-      cryptoSymbol: 'ETH',
-      cryptoName: 'Ethereum',
-      amount: 1.5,
-      valueUSD: 3322.50,
-      timestamp: DateTime.now().subtract(const Duration(hours: 5)),
-      toAddress: '0x8f3Cf7ad51D57D8E6434C3A1',
-      transactionHash: '0xdef456...',
-      fee: 0.002,
-    ),
-    Transaction(
-      id: '3',
-      type: TransactionType.buy,
-      status: TransactionStatus.completed,
-      cryptoSymbol: 'BTC',
-      cryptoName: 'Bitcoin',
-      amount: 0.02,
-      valueUSD: 1650.26,
-      timestamp: DateTime.now().subtract(const Duration(days: 1)),
-      fee: 2.50,
-    ),
-    Transaction(
-      id: '4',
-      type: TransactionType.swap,
-      status: TransactionStatus.pending,
-      cryptoSymbol: 'ETH',
-      cryptoName: 'Ethereum',
-      amount: 0.5,
-      valueUSD: 1107.50,
-      timestamp: DateTime.now().subtract(const Duration(hours: 1)),
-      fee: 0.001,
-    ),
-    Transaction(
-      id: '5',
-      type: TransactionType.receive,
-      status: TransactionStatus.completed,
-      cryptoSymbol: 'XRP',
-      cryptoName: 'Ripple',
-      amount: 100,
-      valueUSD: 200.00,
-      timestamp: DateTime.now().subtract(const Duration(days: 2)),
-      fromAddress: '0xrNative...1234',
-      transactionHash: '0xghi789...',
-      fee: 0.00001,
-    ),
-    Transaction(
-      id: '6',
-      type: TransactionType.sell,
-      status: TransactionStatus.completed,
-      cryptoSymbol: 'BTC',
-      cryptoName: 'Bitcoin',
-      amount: 0.01,
-      valueUSD: 825.13,
-      timestamp: DateTime.now().subtract(const Duration(days: 3)),
-      fee: 1.25,
-    ),
-    Transaction(
-      id: '7',
-      type: TransactionType.send,
-      status: TransactionStatus.failed,
-      cryptoSymbol: 'ETH',
-      cryptoName: 'Ethereum',
-      amount: 0.25,
-      valueUSD: 553.75,
-      timestamp: DateTime.now().subtract(const Duration(days: 4)),
-      toAddress: '0x742d35Cc6634C0532925a3b8',
-      transactionHash: '0xjkl012...',
-      fee: 0.001,
-    ),
-    Transaction(
-      id: '8',
-      type: TransactionType.buy,
-      status: TransactionStatus.completed,
-      cryptoSymbol: 'XRP',
-      cryptoName: 'Ripple',
-      amount: 500,
-      valueUSD: 1000.00,
-      timestamp: DateTime.now().subtract(const Duration(days: 7)),
-      fee: 5.00,
-    ),
-  ];
+  final TransactionService _transactionService = TransactionService();
+  final String? _userId = FirebaseAuth.instance.currentUser?.uid;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
+    _tabController.addListener(() {
+      setState(() {});
+    });
   }
 
   @override
@@ -132,10 +39,11 @@ class _ActivityScreenState extends State<ActivityScreen>
     super.dispose();
   }
 
-  List<Transaction> get _filteredTransactions {
+  // Filter transactions based on selected tab
+  List<Transaction> _filterTransactions(List<Transaction> allTransactions) {
     final selectedTab = _tabController.index;
 
-    if (selectedTab == 0) return _allTransactions; // All
+    if (selectedTab == 0) return allTransactions; // All
 
     TransactionType? filterType;
     switch (selectedTab) {
@@ -146,7 +54,7 @@ class _ActivityScreenState extends State<ActivityScreen>
         filterType = TransactionType.receive;
         break;
       case 3:
-        return _allTransactions
+        return allTransactions
             .where((t) =>
         t.type == TransactionType.buy ||
             t.type == TransactionType.sell ||
@@ -155,16 +63,70 @@ class _ActivityScreenState extends State<ActivityScreen>
     }
 
     if (filterType != null) {
-      return _allTransactions
-          .where((t) => t.type == filterType)
-          .toList();
+      return allTransactions.where((t) => t.type == filterType).toList();
     }
 
-    return _allTransactions;
+    return allTransactions;
+  }
+
+  // Calculate stats from transactions
+  Map<String, double> _calculateStats(List<Transaction> transactions) {
+    final totalSent = transactions
+        .where((t) =>
+    t.type == TransactionType.send &&
+        t.status == TransactionStatus.completed)
+        .fold(0.0, (sum, t) => sum + t.valueUSD);
+
+    final totalReceived = transactions
+        .where((t) =>
+    t.type == TransactionType.receive &&
+        t.status == TransactionStatus.completed)
+        .fold(0.0, (sum, t) => sum + t.valueUSD);
+
+    final totalTrade = transactions
+        .where((t) =>
+    (t.type == TransactionType.buy ||
+        t.type == TransactionType.sell ||
+        t.type == TransactionType.swap) &&
+        t.status == TransactionStatus.completed)
+        .fold(0.0, (sum, t) => sum + t.valueUSD);
+
+    return {
+      'sent': totalSent,
+      'received': totalReceived,
+      'trade': totalTrade,
+    };
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_userId == null) {
+      return Scaffold(
+        backgroundColor: AppColors.background,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.error_outline,
+                size: 64,
+                color: AppColors.textSecondary,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Please login to view your activity',
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -210,8 +172,17 @@ class _ActivityScreenState extends State<ActivityScreen>
               ),
             ),
 
-            // Stats Cards
-            _buildStatsCards(),
+            // Stats Cards with Stream
+            StreamBuilder<List<Transaction>>(
+              stream: _transactionService.getTransactionsStream(_userId!),
+              builder: (context, snapshot) {
+                if (snapshot.hasData) {
+                  final stats = _calculateStats(snapshot.data!);
+                  return _buildStatsCards(stats);
+                }
+                return _buildStatsCards({'sent': 0, 'received': 0, 'trade': 0});
+              },
+            ),
 
             const SizedBox(height: 20),
 
@@ -245,31 +216,74 @@ class _ActivityScreenState extends State<ActivityScreen>
                   Tab(text: 'Received'),
                   Tab(text: 'Trade'),
                 ],
-                onTap: (index) {
-                  setState(() {});
-                },
               ),
             ),
 
             const SizedBox(height: 20),
 
-            // Transaction List
+            // Transaction List with Stream
             Expanded(
-              child: _filteredTransactions.isEmpty
-                  ? _buildEmptyState()
-                  : ListView.builder(
-                itemCount: _filteredTransactions.length,
-                itemBuilder: (context, index) {
-                  return TransactionItem(
-                    transaction: _filteredTransactions[index],
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => TransactionDetailScreen(
-                            transaction: _filteredTransactions[index],
+              child: StreamBuilder<List<Transaction>>(
+                stream: _transactionService.getTransactionsStream(_userId!),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                      child: CircularProgressIndicator(
+                        color: AppColors.primary,
+                      ),
+                    );
+                  }
+
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.error_outline,
+                            size: 64,
+                            color: Colors.red,
                           ),
-                        ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Error: ${snapshot.error}',
+                            style: const TextStyle(
+                              color: AppColors.textSecondary,
+                              fontSize: 14,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+
+                  if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                    return _buildEmptyState();
+                  }
+
+                  final filteredTransactions =
+                  _filterTransactions(snapshot.data!);
+
+                  if (filteredTransactions.isEmpty) {
+                    return _buildEmptyState();
+                  }
+
+                  return ListView.builder(
+                    itemCount: filteredTransactions.length,
+                    itemBuilder: (context, index) {
+                      return TransactionItem(
+                        transaction: filteredTransactions[index],
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => TransactionDetailScreen(
+                                transaction: filteredTransactions[index],
+                              ),
+                            ),
+                          );
+                        },
                       );
                     },
                   );
@@ -279,18 +293,14 @@ class _ActivityScreenState extends State<ActivityScreen>
           ],
         ),
       ),
-      // Update bagian bottomNavigationBar (ganti yang lama dengan ini)
-      // Update bottomNavigationBar - ganti dengan kode lengkap ini
       bottomNavigationBar: CustomBottomNavBar(
         currentIndex: _currentIndex,
         onTap: (index) {
           if (index == 0) {
-            // Navigate back to Home
             Navigator.pop(context);
           } else if (index == 1) {
-            // Already on Activity, do nothing
+            // Already on Activity
           } else if (index == 2) {
-            // Navigate to Exchange
             Navigator.pushReplacement(
               context,
               MaterialPageRoute(
@@ -298,7 +308,6 @@ class _ActivityScreenState extends State<ActivityScreen>
               ),
             );
           } else if (index == 3) {
-            // Navigate to Discover
             Navigator.pushReplacement(
               context,
               MaterialPageRoute(
@@ -306,7 +315,6 @@ class _ActivityScreenState extends State<ActivityScreen>
               ),
             );
           } else if (index == 4) {
-            // Navigate to Profile
             Navigator.pushReplacement(
               context,
               MaterialPageRoute(
@@ -319,26 +327,7 @@ class _ActivityScreenState extends State<ActivityScreen>
     );
   }
 
-  Widget _buildStatsCards() {
-    final totalSent = _allTransactions
-        .where((t) =>
-    t.type == TransactionType.send && t.status == TransactionStatus.completed)
-        .fold(0.0, (sum, t) => sum + t.valueUSD);
-
-    final totalReceived = _allTransactions
-        .where((t) =>
-    t.type == TransactionType.receive &&
-        t.status == TransactionStatus.completed)
-        .fold(0.0, (sum, t) => sum + t.valueUSD);
-
-    final totalTrade = _allTransactions
-        .where((t) =>
-    (t.type == TransactionType.buy ||
-        t.type == TransactionType.sell ||
-        t.type == TransactionType.swap) &&
-        t.status == TransactionStatus.completed)
-        .fold(0.0, (sum, t) => sum + t.valueUSD);
-
+  Widget _buildStatsCards(Map<String, double> stats) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -346,21 +335,21 @@ class _ActivityScreenState extends State<ActivityScreen>
         children: [
           _buildStatCard(
             'Total Sent',
-            '\$${totalSent.toStringAsFixed(2)}',
+            '\$${stats['sent']!.toStringAsFixed(2)}',
             Icons.arrow_upward,
             AppColors.gold,
           ),
           const SizedBox(width: 12),
           _buildStatCard(
             'Total Received',
-            '\$${totalReceived.toStringAsFixed(2)}',
+            '\$${stats['received']!.toStringAsFixed(2)}',
             Icons.arrow_downward,
             AppColors.green,
           ),
           const SizedBox(width: 12),
           _buildStatCard(
             'Total Trade',
-            '\$${totalTrade.toStringAsFixed(2)}',
+            '\$${stats['trade']!.toStringAsFixed(2)}',
             Icons.swap_horiz,
             Colors.blue,
           ),

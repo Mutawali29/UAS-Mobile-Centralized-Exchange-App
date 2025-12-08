@@ -1,35 +1,115 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../models/nft_asset.dart';
 
+class NFTServiceException implements Exception {
+  final String message;
+  final int? statusCode;
+  final bool isRateLimited;
+  final bool isNetworkError;
+
+  NFTServiceException(
+      this.message, {
+        this.statusCode,
+        this.isRateLimited = false,
+        this.isNetworkError = false,
+      });
+
+  @override
+  String toString() => message;
+}
+
 class NFTService {
-  // Menggunakan CoinGecko API untuk NFT data (gratis)
   static const String baseUrl = 'https://api.coingecko.com/api/v3';
+  static const Duration timeout = Duration(seconds: 15);
+  static const int maxRetries = 2;
+
+  // Helper method untuk HTTP request dengan retry dan timeout
+  Future<http.Response> _makeRequest(
+      Uri uri, {
+        int retryCount = 0,
+      }) async {
+    try {
+      final response = await http.get(uri).timeout(
+        timeout,
+        onTimeout: () {
+          throw NFTServiceException(
+            'Request timeout. Please check your internet connection.',
+            isNetworkError: true,
+          );
+        },
+      );
+
+      // Handle rate limiting
+      if (response.statusCode == 429) {
+        if (retryCount < maxRetries) {
+          // Wait before retry (exponential backoff)
+          await Future.delayed(Duration(seconds: (retryCount + 1) * 2));
+          return _makeRequest(uri, retryCount: retryCount + 1);
+        }
+        throw NFTServiceException(
+          'Too many requests. Please try again later.',
+          statusCode: 429,
+          isRateLimited: true,
+        );
+      }
+
+      // Handle other HTTP errors
+      if (response.statusCode != 200) {
+        throw NFTServiceException(
+          'Failed to load NFT data (${response.statusCode})',
+          statusCode: response.statusCode,
+        );
+      }
+
+      return response;
+    } on SocketException {
+      throw NFTServiceException(
+        'No internet connection. Please check your network.',
+        isNetworkError: true,
+      );
+    } on http.ClientException {
+      throw NFTServiceException(
+        'Network error. Please try again.',
+        isNetworkError: true,
+      );
+    } on NFTServiceException {
+      rethrow;
+    } catch (e) {
+      throw NFTServiceException(
+        'Unexpected error: ${e.toString()}',
+      );
+    }
+  }
 
   // Fetch NFT collections
   Future<List<NFTAsset>> fetchNFTAssets({int limit = 20}) async {
     try {
-      final response = await http.get(
-        Uri.parse(
-          '$baseUrl/nfts/list?per_page=$limit',
-        ),
-      );
+      print('🔄 Fetching NFT assets (limit: $limit)...');
 
-      if (response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
+      final uri = Uri.parse('$baseUrl/nfts/list?per_page=$limit');
+      final response = await _makeRequest(uri);
+      final List<dynamic> data = json.decode(response.body);
 
-        if (data.isEmpty) {
-          return _getDummyNFTs(limit);
-        }
-
-        // Get detailed info for each NFT
-        return await _fetchDetailedNFTs(data.take(limit).toList());
-      } else {
-        print('NFT API Error: ${response.statusCode}');
+      if (data.isEmpty) {
+        print('⚠️ No NFT data from API, using fallback data');
         return _getDummyNFTs(limit);
       }
+
+      // Get detailed info for each NFT
+      print('✅ NFT list fetched, getting detailed info...');
+      final detailedNFTs = await _fetchDetailedNFTs(data.take(limit).toList());
+
+      print('✅ Successfully fetched ${detailedNFTs.length} NFT assets');
+      return detailedNFTs;
+    } on NFTServiceException catch (e) {
+      print('⚠️ NFT Service Exception: ${e.message}');
+      print('📦 Using fallback NFT data');
+      return _getDummyNFTs(limit);
     } catch (e) {
-      print('Error fetching NFTs: $e');
+      print('❌ Unexpected error fetching NFTs: $e');
+      print('📦 Using fallback NFT data');
       return _getDummyNFTs(limit);
     }
   }
@@ -41,16 +121,17 @@ class NFTService {
     for (var nft in nftList) {
       try {
         final id = nft['id'];
-        final response = await http.get(
-          Uri.parse('$baseUrl/nfts/$id'),
-        );
+        final uri = Uri.parse('$baseUrl/nfts/$id');
+        final response = await _makeRequest(uri);
+        final data = json.decode(response.body);
+        detailedNFTs.add(NFTAsset.fromJson(data));
 
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          detailedNFTs.add(NFTAsset.fromJson(data));
-        }
+        print('  ✓ Fetched details for: $id');
+      } on NFTServiceException catch (e) {
+        print('  ⚠️ Failed to fetch NFT detail: ${e.message}');
+        continue;
       } catch (e) {
-        print('Error fetching NFT detail: $e');
+        print('  ⚠️ Error fetching NFT detail: $e');
         continue;
       }
 
@@ -59,29 +140,38 @@ class NFTService {
       await Future.delayed(const Duration(milliseconds: 300));
     }
 
-    return detailedNFTs.isNotEmpty ? detailedNFTs : _getDummyNFTs(10);
+    if (detailedNFTs.isEmpty) {
+      print('⚠️ No detailed NFT data available, using fallback');
+      return _getDummyNFTs(10);
+    }
+
+    return detailedNFTs;
   }
 
   // Fetch single NFT
   Future<NFTAsset> fetchSingleNFT(String nftId) async {
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/nfts/$nftId'),
-      );
+      print('🔄 Fetching single NFT: $nftId');
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        return NFTAsset.fromJson(data);
-      } else {
-        throw Exception('Failed to load NFT');
-      }
+      final uri = Uri.parse('$baseUrl/nfts/$nftId');
+      final response = await _makeRequest(uri);
+      final data = json.decode(response.body);
+
+      print('✅ Successfully fetched NFT: $nftId');
+      return NFTAsset.fromJson(data);
+    } on NFTServiceException catch (e) {
+      print('❌ NFT Service Exception for $nftId: ${e.message}');
+      throw NFTServiceException('Failed to load NFT "$nftId": ${e.message}');
     } catch (e) {
-      throw Exception('Error fetching NFT: $e');
+      print('❌ Error fetching NFT $nftId: $e');
+      throw NFTServiceException('Error fetching NFT: ${e.toString()}');
     }
   }
 
   // Dummy NFT data sebagai fallback
   List<NFTAsset> _getDummyNFTs(int limit) {
+    print('📦 Loading ${limit} dummy NFT assets');
+
     final dummyData = [
       {
         'id': 'bored-ape-yacht-club',

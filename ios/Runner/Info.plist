@@ -45,5 +45,11 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+
+	<key>NSLocationWhenInUseUsageDescription</key>
+    <string>Aplikasi Crypto Wallet membutuhkan akses lokasi Anda untuk menampilkan informasi lokasi.</string>
+
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>Aplikasi Crypto Wallet membutuhkan akses lokasi latar belakang.</string>
 </dict>
 </plist>

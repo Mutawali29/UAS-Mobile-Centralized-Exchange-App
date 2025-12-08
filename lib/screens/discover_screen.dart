@@ -31,6 +31,17 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   // Trending cryptos dari API
   List<TrendingCrypto> _trendingCryptos = [];
 
+  // State variables untuk error handling
+  String? _trendingError;
+  bool _hasNetworkError = false;
+  bool _isRateLimited = false;
+
+  // Search variables
+  final TextEditingController _searchController = TextEditingController();
+  bool _isSearching = false;
+  String _searchQuery = '';
+  Timer? _debounce;
+
   // Sample news articles
   final List<NewsArticle> _allNews = [
     NewsArticle(
@@ -115,12 +126,27 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     super.initState();
     _tabController = TabController(length: _categories.length, vsync: this);
     _loadData();
+    _searchController.addListener(_onSearchChanged);
   }
 
   @override
   void dispose() {
     _tabController.dispose();
+    _searchController.removeListener(_onSearchChanged);
+    _searchController.dispose();
+    _debounce?.cancel();
     super.dispose();
+  }
+
+  void _onSearchChanged() {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    _debounce = Timer(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        setState(() {
+          _searchQuery = _searchController.text.toLowerCase();
+        });
+      }
+    });
   }
 
   Future<void> _loadData() async {
@@ -131,9 +157,19 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   }
 
   Future<void> _loadTrendingCryptos() async {
+    if (!mounted) return;
+
     setState(() {
       _isTrendingLoading = true;
+      _trendingError = null;
+      _hasNetworkError = false;
+      _isRateLimited = false;
     });
+
+    debugPrint('');
+    debugPrint('═══════════════════════════════════════════════════════');
+    debugPrint('📱 [DiscoverScreen] Loading trending cryptocurrencies...');
+    debugPrint('═══════════════════════════════════════════════════════');
 
     try {
       final trendingData = await _cryptoService.fetchTrendingCryptos(limit: 10);
@@ -142,25 +178,100 @@ class _DiscoverScreenState extends State<DiscoverScreen>
         setState(() {
           _trendingCryptos = trendingData;
           _isTrendingLoading = false;
+          _trendingError = null;
         });
+
+        debugPrint('');
+        debugPrint('✅ [DiscoverScreen] Successfully loaded ${trendingData.length} trending cryptos');
+        debugPrint('═══════════════════════════════════════════════════════');
       }
-    } catch (e) {
-      print('Error loading trending cryptos: $e');
+    } on CryptoServiceException catch (e) {
+      debugPrint('');
+      debugPrint('ℹ️ [DiscoverScreen] Unable to load trending cryptos');
+      debugPrint('   Reason: ${e.message}');
+
+      if (e.isNetworkError) {
+        debugPrint('   Type: Network/Connection Issue');
+        debugPrint('   Suggestion: Check internet connection or try again later');
+      } else if (e.isRateLimited) {
+        debugPrint('   Type: API Rate Limit');
+        debugPrint('   Suggestion: Wait a few moments before retrying');
+      } else if (e.statusCode != null) {
+        debugPrint('   HTTP Status: ${e.statusCode}');
+        debugPrint('   Suggestion: API may be temporarily unavailable');
+      }
+      debugPrint('═══════════════════════════════════════════════════════');
 
       if (mounted) {
         setState(() {
+          _trendingCryptos = [];
           _isTrendingLoading = false;
+          _trendingError = e.message;
+          _hasNetworkError = e.isNetworkError;
+          _isRateLimited = e.isRateLimited;
         });
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to load trending cryptos: $e'),
-            backgroundColor: AppColors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        if (e.isNetworkError || e.isRateLimited) {
+          _showErrorSnackbar(e.message, isWarning: e.isRateLimited);
+        }
+      }
+    } catch (e) {
+      debugPrint('');
+      debugPrint('⚠️ [DiscoverScreen] Unexpected error occurred');
+      debugPrint('   Details: $e');
+      debugPrint('   Suggestion: This may be a bug, please report if it persists');
+      debugPrint('═══════════════════════════════════════════════════════');
+
+      if (mounted) {
+        setState(() {
+          _trendingCryptos = [];
+          _isTrendingLoading = false;
+          _trendingError = 'An unexpected error occurred';
+          _hasNetworkError = false;
+          _isRateLimited = false;
+        });
       }
     }
+  }
+
+  void _showErrorSnackbar(String message, {bool isWarning = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              isWarning ? Icons.warning_amber_rounded : Icons.error_outline,
+              color: Colors.white,
+              size: 20,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: isWarning ? Colors.orange : AppColors.red,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        margin: const EdgeInsets.all(16),
+        duration: Duration(seconds: isWarning ? 4 : 3),
+        action: SnackBarAction(
+          label: 'Dismiss',
+          textColor: Colors.white,
+          onPressed: () {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _loadNews() async {
@@ -179,10 +290,24 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
   List<NewsArticle> get _filteredNews {
     final selectedCategory = _categories[_tabController.index];
-    if (selectedCategory == 'All') {
-      return _allNews;
+    List<NewsArticle> filtered = _allNews;
+
+    // Filter by category
+    if (selectedCategory != 'All') {
+      filtered = filtered.where((news) => news.category == selectedCategory).toList();
     }
-    return _allNews.where((news) => news.category == selectedCategory).toList();
+
+    // Filter by search query
+    if (_searchQuery.isNotEmpty) {
+      filtered = filtered.where((news) {
+        final titleLower = news.title.toLowerCase();
+        final descriptionLower = news.description.toLowerCase();
+        return titleLower.contains(_searchQuery) ||
+            descriptionLower.contains(_searchQuery);
+      }).toList();
+    }
+
+    return filtered;
   }
 
   @override
@@ -197,13 +322,19 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
             const SizedBox(height: 16),
 
-            // Trending Section
-            _buildTrendingSection(),
+            // Search Bar
+            _buildSearchBar(),
 
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
 
-            // Modern Category Tabs
-            _buildModernCategoryTabs(),
+            // Trending Section - hide when searching
+            if (!_isSearching) ...[
+              _buildTrendingSection(),
+              const SizedBox(height: 12),
+            ],
+
+            // Modern Category Tabs - hide when searching
+            if (!_isSearching) _buildModernCategoryTabs(),
 
             const SizedBox(height: 8),
 
@@ -310,6 +441,85 @@ class _DiscoverScreenState extends State<DiscoverScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.cardBackground,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: _isSearching
+                ? AppColors.primary.withOpacity(0.3)
+                : AppColors.textSecondary.withOpacity(0.1),
+            width: _isSearching ? 1.5 : 1,
+          ),
+          boxShadow: _isSearching
+              ? [
+            BoxShadow(
+              color: AppColors.primary.withOpacity(0.1),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ]
+              : null,
+        ),
+        child: TextField(
+          controller: _searchController,
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 15,
+          ),
+          decoration: InputDecoration(
+            hintText: 'Search news...',
+            hintStyle: TextStyle(
+              color: AppColors.textSecondary.withOpacity(0.6),
+              fontSize: 15,
+            ),
+            prefixIcon: Icon(
+              Icons.search,
+              color: _isSearching
+                  ? AppColors.primary
+                  : AppColors.textSecondary.withOpacity(0.6),
+              size: 20,
+            ),
+            suffixIcon: _searchController.text.isNotEmpty
+                ? IconButton(
+              icon: Icon(
+                Icons.clear,
+                color: AppColors.textSecondary.withOpacity(0.6),
+                size: 20,
+              ),
+              onPressed: () {
+                _searchController.clear();
+                setState(() {
+                  _searchQuery = '';
+                  _isSearching = false;
+                });
+              },
+            )
+                : null,
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 14,
+            ),
+          ),
+          onTap: () {
+            setState(() {
+              _isSearching = true;
+            });
+          },
+          onChanged: (value) {
+            setState(() {
+              _isSearching = value.isNotEmpty;
+            });
+          },
+        ),
       ),
     );
   }
@@ -455,67 +665,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
             ),
           )
               : _trendingCryptos.isEmpty
-              ? Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppColors.cardBackground,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: AppColors.textSecondary.withOpacity(0.1),
-                      ),
-                    ),
-                    child: const Icon(
-                      Icons.trending_up,
-                      size: 24,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'No trending data',
-                    style: TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  TextButton.icon(
-                    onPressed: _loadTrendingCryptos,
-                    style: TextButton.styleFrom(
-                      backgroundColor: AppColors.primary.withOpacity(0.1),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 6,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                    icon: const Icon(
-                      Icons.refresh,
-                      size: 16,
-                      color: AppColors.primary,
-                    ),
-                    label: const Text(
-                      'Retry',
-                      style: TextStyle(
-                        color: AppColors.primary,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          )
+              ? _buildTrendingEmptyState()
               : ListView.builder(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -534,7 +684,123 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     );
   }
 
+  Widget _buildTrendingEmptyState() {
+    IconData icon;
+    String title;
+    String subtitle;
+    Color iconColor;
+
+    if (_hasNetworkError) {
+      icon = Icons.wifi_off_rounded;
+      title = 'No Internet Connection';
+      subtitle = 'Please check your network and try again';
+      iconColor = Colors.orange;
+    } else if (_isRateLimited) {
+      icon = Icons.hourglass_empty_rounded;
+      title = 'Too Many Requests';
+      subtitle = 'Please wait a moment before retrying';
+      iconColor = Colors.amber;
+    } else if (_trendingError != null) {
+      icon = Icons.error_outline_rounded;
+      title = 'Failed to Load';
+      subtitle = _trendingError!;
+      iconColor = AppColors.red;
+    } else {
+      icon = Icons.trending_up;
+      title = 'No trending data';
+      subtitle = 'Unable to fetch trending cryptocurrencies';
+      iconColor = AppColors.textSecondary;
+    }
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.cardBackground,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: iconColor.withOpacity(0.2),
+                  width: 2,
+                ),
+              ),
+              child: Icon(
+                icon,
+                size: 24,
+                color: iconColor,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+              ),
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: _isRateLimited
+                  ? null
+                  : () {
+                _loadTrendingCryptos();
+              },
+              style: TextButton.styleFrom(
+                backgroundColor: _isRateLimited
+                    ? AppColors.textSecondary.withOpacity(0.1)
+                    : AppColors.primary.withOpacity(0.1),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              icon: Icon(
+                Icons.refresh,
+                size: 16,
+                color: _isRateLimited
+                    ? AppColors.textSecondary.withOpacity(0.5)
+                    : AppColors.primary,
+              ),
+              label: Text(
+                _isRateLimited ? 'Please Wait' : 'Retry',
+                style: TextStyle(
+                  color: _isRateLimited
+                      ? AppColors.textSecondary.withOpacity(0.5)
+                      : AppColors.primary,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildEmptyState() {
+    final bool isSearching = _searchQuery.isNotEmpty;
+
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -550,28 +816,64 @@ class _DiscoverScreenState extends State<DiscoverScreen>
               ),
             ),
             child: Icon(
-              Icons.article_outlined,
+              isSearching ? Icons.search_off : Icons.article_outlined,
               size: 64,
               color: AppColors.textSecondary.withOpacity(0.5),
             ),
           ),
           const SizedBox(height: 20),
-          const Text(
-            'No news available',
-            style: TextStyle(
+          Text(
+            isSearching ? 'No results found' : 'No news available',
+            style: const TextStyle(
               color: AppColors.textPrimary,
               fontSize: 18,
               fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Check back later for updates',
-            style: TextStyle(
+          Text(
+            isSearching
+                ? 'Try searching with different keywords'
+                : 'Check back later for updates',
+            style: const TextStyle(
               color: AppColors.textSecondary,
               fontSize: 14,
             ),
           ),
+          if (isSearching) ...[
+            const SizedBox(height: 16),
+            TextButton.icon(
+              onPressed: () {
+                _searchController.clear();
+                setState(() {
+                  _searchQuery = '';
+                  _isSearching = false;
+                });
+              },
+              style: TextButton.styleFrom(
+                backgroundColor: AppColors.primary.withOpacity(0.1),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 12,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              icon: const Icon(
+                Icons.clear,
+                size: 18,
+                color: AppColors.primary,
+              ),
+              label: const Text(
+                'Clear Search',
+                style: TextStyle(
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -719,7 +1021,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
           children: [
             _buildDetailRow(
               'Price',
-              '\$${crypto.priceUSD >= 1 ? crypto.priceUSD.toStringAsFixed(2) : crypto.priceUSD.toStringAsFixed(6)}',
+              '\${crypto.priceUSD >= 1 ? crypto.priceUSD.toStringAsFixed(2) : crypto.priceUSD.toStringAsFixed(6)}',
             ),
             const SizedBox(height: 12),
             _buildDetailRow(
@@ -730,12 +1032,12 @@ class _DiscoverScreenState extends State<DiscoverScreen>
             const SizedBox(height: 12),
             _buildDetailRow(
               'Market Cap',
-              '\$${_formatNumber(crypto.marketCap)}',
+              '\${_formatNumber(crypto.marketCap)}',
             ),
             const SizedBox(height: 12),
             _buildDetailRow(
               '24h Volume',
-              '\$${_formatNumber(crypto.volume24h)}',
+              '\${_formatNumber(crypto.volume24h)}',
             ),
             const SizedBox(height: 12),
             _buildDetailRow('Rank', '#${crypto.rank}'),

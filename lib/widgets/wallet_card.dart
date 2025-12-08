@@ -4,6 +4,7 @@ import '../utils/app_colors.dart';
 import '../screens/send_screen.dart';
 import '../screens/receive_screen.dart';
 import '../screens/qr_scanner_screen.dart';
+import '../screens/wallet_notes_screen.dart'; // TAMBAHKAN INI
 
 class WalletCard extends StatefulWidget {
   final double balance;
@@ -92,6 +93,15 @@ class _WalletCardState extends State<WalletCard> with SingleTickerProviderStateM
     );
   }
 
+  // TAMBAHKAN FUNGSI INI
+  void _openWalletNotes(BuildContext context) {
+    HapticFeedback.mediumImpact();
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const WalletNotesScreen()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -137,22 +147,29 @@ class _WalletCardState extends State<WalletCard> with SingleTickerProviderStateM
                       Expanded(
                         child: Row(
                           children: [
-                            // Wallet Icon
-                            Container(
-                              width: 44,
-                              height: 44,
-                              decoration: BoxDecoration(
-                                color: AppColors.primary.withOpacity(0.15),
+                            // Wallet Icon - UBAH INI JADI CLICKABLE
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => _openWalletNotes(context), // TAMBAHKAN INI
                                 borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: AppColors.primary.withOpacity(0.3),
-                                  width: 1.5,
+                                child: Container(
+                                  width: 44,
+                                  height: 44,
+                                  decoration: BoxDecoration(
+                                    color: AppColors.primary.withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: AppColors.primary.withOpacity(0.3),
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                  child: Icon(
+                                    Icons.account_balance_wallet_rounded,
+                                    color: AppColors.primary,
+                                    size: 22,
+                                  ),
                                 ),
-                              ),
-                              child: Icon(
-                                Icons.account_balance_wallet_rounded,
-                                color: AppColors.primary,
-                                size: 22,
                               ),
                             ),
                             const SizedBox(width: 14),

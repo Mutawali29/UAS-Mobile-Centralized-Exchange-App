@@ -1,17 +1,14 @@
 name: cex
-description: "A new Flutter project."
-publish_to: 'none'
-
-version: 1.0.0+1
+description: A new Flutter project
 
 environment:
-  sdk: ^3.9.0
+  sdk: '^3.9.0'
 
 dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  video_player: ^2.8.0  # ← Pindah ke sini
+  video_player: ^2.8.0
   http: ^1.1.0
   intl: ^0.18.1
 
@@ -26,11 +23,14 @@ dependencies:
   provider: ^6.1.1
   shared_preferences: ^2.2.2
 
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
-  flutter_lints: ^5.0.0
+  # GPS Dependencies
+#  geolocator: ^11.0.0
+#  permission_handler: ^11.4.3
+#  permission_handler: ^12.0.1
+  geocoding: ^3.0.0
+  geolocator: ^13.0.2
+
+  google_maps_flutter: ^2.5.0
 
 flutter:
   uses-material-design: true
-

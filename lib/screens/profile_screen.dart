@@ -4,13 +4,14 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_profile.dart';
 import '../widgets/profile_menu_item.dart';
 import '../widgets/bottom_nav_bar.dart';
+import '../widgets/location_card.dart';
 import '../utils/app_colors.dart';
 import '../services/auth_service.dart';
 
 import 'discover_screen.dart';
 import 'activity_screen.dart';
 import 'exchange_screen.dart';
-import 'login_screen.dart'; // Import login screen untuk logout
+import 'login_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -449,7 +450,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
           const SizedBox(height: 16),
+
+          // GPS Location Card - MENGGUNAKAN WIDGET TERPISAH
+          const LocationCard(),
+
           // Edit Profile Button
+          const SizedBox(height: 16),
+
           SizedBox(
             width: double.infinity,
             child: OutlinedButton(

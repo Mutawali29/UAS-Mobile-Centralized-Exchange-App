@@ -1,3 +1,5 @@
+// models/exchange_rate.dart
+
 class ExchangeRate {
   final String fromCrypto;
   final String toCrypto;
@@ -31,12 +33,13 @@ class ExchangeRate {
 }
 
 class ExchangePair {
-  final String symbol;
-  final String name;
-  final String icon;
-  final double balance;
-  final double priceUSD;
-  final String? imageUrl;
+  final String symbol;       // BTC, ETH, XRP
+  final String name;         // Bitcoin, Ethereum, Ripple
+  final String icon;         // ₿, ⟠, ✕
+  final double balance;      // User's balance
+  final double priceUSD;     // Current price in USD
+  final String? imageUrl;    // Logo URL
+  final String? coinId;      // CoinGecko ID (bitcoin, ethereum, ripple) - untuk Firebase reference
 
   ExchangePair({
     required this.symbol,
@@ -45,5 +48,45 @@ class ExchangePair {
     required this.balance,
     required this.priceUSD,
     this.imageUrl,
+    this.coinId,
   });
+
+  // Copy with method untuk update data
+  ExchangePair copyWith({
+    String? symbol,
+    String? name,
+    String? icon,
+    double? balance,
+    double? priceUSD,
+    String? imageUrl,
+    String? coinId,
+  }) {
+    return ExchangePair(
+      symbol: symbol ?? this.symbol,
+      name: name ?? this.name,
+      icon: icon ?? this.icon,
+      balance: balance ?? this.balance,
+      priceUSD: priceUSD ?? this.priceUSD,
+      imageUrl: imageUrl ?? this.imageUrl,
+      coinId: coinId ?? this.coinId,
+    );
+  }
+
+  // Convert to JSON (untuk debugging atau storage)
+  Map<String, dynamic> toJson() {
+    return {
+      'symbol': symbol,
+      'name': name,
+      'icon': icon,
+      'balance': balance,
+      'priceUSD': priceUSD,
+      'imageUrl': imageUrl,
+      'coinId': coinId,
+    };
+  }
+
+  @override
+  String toString() {
+    return 'ExchangePair(symbol: $symbol, balance: $balance, price: \$$priceUSD)';
+  }
 }

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../models/exchange_rate.dart';
+import '../services/ExchangeService.dart';
+import '../services/crypto_service.dart';
 import '../widgets/bottom_nav_bar.dart';
 import '../widgets/crypto_selector_bottom_sheet.dart';
 import '../utils/app_colors.dart';
@@ -21,65 +24,23 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
   final TextEditingController _fromAmountController = TextEditingController();
   final TextEditingController _toAmountController = TextEditingController();
 
-  // Sample crypto list
-  final List<ExchangePair> _cryptoList = [
-    ExchangePair(
-      symbol: 'BTC',
-      name: 'Bitcoin',
-      icon: '₿',
-      balance: 0.04511,
-      priceUSD: 82513,
-    ),
-    ExchangePair(
-      symbol: 'ETH',
-      name: 'Ethereum',
-      icon: '⟠',
-      balance: 3.56,
-      priceUSD: 2215,
-    ),
-    ExchangePair(
-      symbol: 'XRP',
-      name: 'Ripple',
-      icon: '✕',
-      balance: 4.0,
-      priceUSD: 2.0,
-    ),
-    ExchangePair(
-      symbol: 'BNB',
-      name: 'Binance Coin',
-      icon: 'B',
-      balance: 2.5,
-      priceUSD: 315,
-    ),
-    ExchangePair(
-      symbol: 'ADA',
-      name: 'Cardano',
-      icon: '₳',
-      balance: 100,
-      priceUSD: 0.45,
-    ),
-    ExchangePair(
-      symbol: 'SOL',
-      name: 'Solana',
-      icon: '◎',
-      balance: 5.0,
-      priceUSD: 98,
-    ),
-  ];
+  final ExchangeService _exchangeService = ExchangeService();
 
-  late ExchangePair _fromCrypto;
-  late ExchangePair _toCrypto;
+  List<ExchangePair> _cryptoList = [];
+  ExchangePair? _fromCrypto;
+  ExchangePair? _toCrypto;
 
   double _exchangeRate = 0.0;
   double _networkFee = 0.001;
+
+  bool _isLoading = true;
   bool _isCalculating = false;
+  String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _fromCrypto = _cryptoList[0]; // BTC
-    _toCrypto = _cryptoList[1]; // ETH
-    _calculateExchangeRate();
+    _initializeData();
     _fromAmountController.addListener(_onFromAmountChanged);
   }
 
@@ -90,9 +51,91 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
     super.dispose();
   }
 
+  // Initialize data from Firebase & CoinGecko
+  Future<void> _initializeData() async {
+    try {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+
+      // Check if user is authenticated
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        throw Exception('User not authenticated');
+      }
+
+      print('👤 Current user: ${user.uid}');
+
+      // Fetch available exchange pairs dengan balance user
+      print('📊 Fetching exchange pairs...');
+      _cryptoList = await _exchangeService.getAvailableExchangePairs();
+
+      if (_cryptoList.isEmpty) {
+        throw Exception('No cryptocurrencies available');
+      }
+
+      // Set default crypto pairs
+      // Prioritas: crypto dengan balance > 0
+      final cryptoWithBalance = _cryptoList.where((c) => c.balance > 0).toList();
+
+      if (cryptoWithBalance.isNotEmpty) {
+        _fromCrypto = cryptoWithBalance.first;
+        // Cari crypto berbeda untuk toCrypto
+        _toCrypto = _cryptoList.firstWhere(
+              (c) => c.symbol != _fromCrypto!.symbol,
+          orElse: () => _cryptoList[1],
+        );
+      } else {
+        // Jika tidak ada balance, gunakan BTC -> ETH sebagai default
+        _fromCrypto = _cryptoList.firstWhere(
+              (c) => c.symbol == 'BTC',
+          orElse: () => _cryptoList[0],
+        );
+        _toCrypto = _cryptoList.firstWhere(
+              (c) => c.symbol == 'ETH' && c.symbol != _fromCrypto!.symbol,
+          orElse: () => _cryptoList[1],
+        );
+      }
+
+      _calculateExchangeRate();
+
+      setState(() {
+        _isLoading = false;
+      });
+
+      print('✅ Exchange screen initialized successfully');
+      print('   From: ${_fromCrypto!.symbol} (Balance: ${_fromCrypto!.balance})');
+      print('   To: ${_toCrypto!.symbol} (Balance: ${_toCrypto!.balance})');
+
+    } catch (e) {
+      print('❌ Error initializing data: $e');
+      setState(() {
+        _isLoading = false;
+        _errorMessage = _getErrorMessage(e);
+      });
+    }
+  }
+
+  String _getErrorMessage(dynamic error) {
+    if (error is CryptoServiceException) {
+      return error.message;
+    }
+    return 'Failed to load data. Please try again.';
+  }
+
   void _calculateExchangeRate() {
+    if (_fromCrypto == null || _toCrypto == null) return;
+
     setState(() {
-      _exchangeRate = _fromCrypto.priceUSD / _toCrypto.priceUSD;
+      _exchangeRate = _exchangeService.calculateExchangeRate(
+        _fromCrypto!,
+        _toCrypto!,
+      );
+      _networkFee = _exchangeService.calculateNetworkFee(
+        double.tryParse(_fromAmountController.text) ?? 0.001,
+        _fromCrypto!.priceUSD,
+      );
     });
   }
 
@@ -105,9 +148,19 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
     final fromAmount = double.tryParse(_fromAmountController.text) ?? 0;
     final toAmount = fromAmount * _exchangeRate;
     _toAmountController.text = toAmount.toStringAsFixed(6);
+
+    // Recalculate network fee
+    setState(() {
+      _networkFee = _exchangeService.calculateNetworkFee(
+        fromAmount,
+        _fromCrypto!.priceUSD,
+      );
+    });
   }
 
   void _swapCryptos() {
+    if (_fromCrypto == null || _toCrypto == null) return;
+
     setState(() {
       final temp = _fromCrypto;
       _fromCrypto = _toCrypto;
@@ -122,6 +175,8 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
   }
 
   Future<void> _selectFromCrypto() async {
+    if (_toCrypto == null) return;
+
     final result = await showModalBottomSheet<ExchangePair>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -132,7 +187,7 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
       ),
     );
 
-    if (result != null && result.symbol != _toCrypto.symbol) {
+    if (result != null && result.symbol != _toCrypto!.symbol) {
       setState(() {
         _fromCrypto = result;
         _calculateExchangeRate();
@@ -142,6 +197,8 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
   }
 
   Future<void> _selectToCrypto() async {
+    if (_fromCrypto == null) return;
+
     final result = await showModalBottomSheet<ExchangePair>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -152,7 +209,7 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
       ),
     );
 
-    if (result != null && result.symbol != _fromCrypto.symbol) {
+    if (result != null && result.symbol != _fromCrypto!.symbol) {
       setState(() {
         _toCrypto = result;
         _calculateExchangeRate();
@@ -162,15 +219,34 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
   }
 
   void _executeExchange() {
-    final fromAmount = double.tryParse(_fromAmountController.text) ?? 0;
-
-    if (fromAmount <= 0) {
-      _showSnackBar('Please enter a valid amount', isError: true);
+    if (_fromCrypto == null || _toCrypto == null) {
+      _showSnackBar('Please select cryptocurrencies', isError: true);
       return;
     }
 
-    if (fromAmount > _fromCrypto.balance) {
-      _showSnackBar('Insufficient balance', isError: true);
+    final fromAmount = double.tryParse(_fromAmountController.text) ?? 0;
+
+    // Validate amount
+    if (!_exchangeService.validateExchange(
+      fromAmount: fromAmount,
+      balance: _fromCrypto!.balance,
+      networkFee: _networkFee,
+    )) {
+      if (fromAmount <= 0) {
+        _showSnackBar('Please enter a valid amount', isError: true);
+      } else {
+        _showSnackBar('Insufficient balance', isError: true);
+      }
+      return;
+    }
+
+    // Check minimum amount
+    final minAmount = _exchangeService.getMinimumExchangeAmount(_fromCrypto!.symbol);
+    if (fromAmount < minAmount) {
+      _showSnackBar(
+        'Minimum amount: $minAmount ${_fromCrypto!.symbol}',
+        isError: true,
+      );
       return;
     }
 
@@ -183,7 +259,7 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
 
   Widget _buildConfirmationDialog(double fromAmount) {
     final toAmount = double.tryParse(_toAmountController.text) ?? 0;
-    final fee = _networkFee * _fromCrypto.priceUSD;
+    final fee = _networkFee * _fromCrypto!.priceUSD;
 
     return AlertDialog(
       backgroundColor: AppColors.cardBackground,
@@ -201,11 +277,14 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildDialogRow('From:', '$fromAmount ${_fromCrypto.symbol}'),
+          _buildDialogRow('From:', '$fromAmount ${_fromCrypto!.symbol}'),
           const SizedBox(height: 8),
-          _buildDialogRow('To:', '$toAmount ${_toCrypto.symbol}'),
+          _buildDialogRow('To:', '$toAmount ${_toCrypto!.symbol}'),
           const SizedBox(height: 8),
-          _buildDialogRow('Rate:', '1 ${_fromCrypto.symbol} = ${_exchangeRate.toStringAsFixed(6)} ${_toCrypto.symbol}'),
+          _buildDialogRow(
+            'Rate:',
+            '1 ${_fromCrypto!.symbol} = ${_exchangeRate.toStringAsFixed(6)} ${_toCrypto!.symbol}',
+          ),
           const SizedBox(height: 8),
           _buildDialogRow('Network Fee:', '\$${fee.toStringAsFixed(2)}'),
           const Divider(color: AppColors.textSecondary, height: 24),
@@ -229,7 +308,7 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
         ElevatedButton(
           onPressed: () {
             Navigator.pop(context);
-            _performExchange();
+            _performExchange(fromAmount, toAmount);
           },
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.primary,
@@ -255,32 +334,58 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
             fontSize: 14,
           ),
         ),
-        Text(
-          value,
-          style: const TextStyle(
-            color: AppColors.textPrimary,
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
+        Flexible(
+          child: Text(
+            value,
+            style: const TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+            textAlign: TextAlign.right,
           ),
         ),
       ],
     );
   }
 
-  void _performExchange() {
+  Future<void> _performExchange(double fromAmount, double toAmount) async {
     setState(() {
       _isCalculating = true;
     });
 
-    // Simulate exchange process
-    Future.delayed(const Duration(seconds: 2), () {
+    try {
+      // Execute exchange in Firebase
+      await _exchangeService.executeExchange(
+        fromCrypto: _fromCrypto!,
+        toCrypto: _toCrypto!,
+        fromAmount: fromAmount,
+        toAmount: toAmount,
+        exchangeRate: _exchangeRate,
+        networkFee: _networkFee,
+      );
+
+      // Refresh data
+      await _initializeData();
+
       setState(() {
         _isCalculating = false;
         _fromAmountController.clear();
         _toAmountController.clear();
       });
+
       _showSnackBar('Exchange completed successfully!');
-    });
+
+    } catch (e) {
+      print('❌ Exchange failed: $e');
+      setState(() {
+        _isCalculating = false;
+      });
+      _showSnackBar(
+        'Exchange failed: ${_getErrorMessage(e)}',
+        isError: true,
+      );
+    }
   }
 
   void _showSnackBar(String message, {bool isError = false}) {
@@ -302,225 +407,294 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
+        child: _isLoading
+            ? _buildLoadingState()
+            : _errorMessage != null
+            ? _buildErrorState()
+            : _buildExchangeContent(),
+      ),
+      bottomNavigationBar: CustomBottomNavBar(
+        currentIndex: _currentIndex,
+        onTap: (index) {
+          if (index == 0) {
+            Navigator.pop(context);
+          } else if (index == 1) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const ActivityScreen()),
+            );
+          } else if (index == 2) {
+            // Already on Exchange
+          } else if (index == 3) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const DiscoverScreen()),
+            );
+          } else if (index == 4) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const ProfileScreen()),
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  Widget _buildLoadingState() {
+    return const Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircularProgressIndicator(color: AppColors.primary),
+          SizedBox(height: 16),
+          Text(
+            'Loading exchange data...',
+            style: TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            const Icon(
+              Icons.error_outline,
+              size: 64,
+              color: AppColors.red,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              _errorMessage ?? 'An error occurred',
+              style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 16,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: _initializeData,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 32,
+                  vertical: 12,
+                ),
+              ),
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildExchangeContent() {
+    if (_fromCrypto == null || _toCrypto == null) {
+      return const Center(
+        child: Text(
+          'No cryptocurrencies available',
+          style: TextStyle(color: AppColors.textSecondary),
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        // Header
+        Padding(
+          padding: const EdgeInsets.all(20),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Exchange',
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Row(
                 children: [
-                  const Text(
-                    'Exchange',
-                    style: TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  IconButton(
+                    icon: const Icon(Icons.refresh, color: AppColors.textSecondary),
+                    onPressed: _initializeData,
                   ),
                   IconButton(
-                    icon: const Icon(
-                      Icons.history,
-                      color: AppColors.textSecondary,
-                    ),
+                    icon: const Icon(Icons.history, color: AppColors.textSecondary),
                     onPressed: () {
                       // TODO: Show exchange history
                     },
                   ),
                 ],
               ),
-            ),
+            ],
+          ),
+        ),
 
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Column(
-                  children: [
-                    // From Card
-                    _buildCryptoCard(
-                      label: 'From',
-                      crypto: _fromCrypto,
-                      controller: _fromAmountController,
-                      onTap: _selectFromCrypto,
-                      isFrom: true,
-                    ),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Column(
+              children: [
+                // From Card
+                _buildCryptoCard(
+                  label: 'From',
+                  crypto: _fromCrypto!,
+                  controller: _fromAmountController,
+                  onTap: _selectFromCrypto,
+                  isFrom: true,
+                ),
 
-                    const SizedBox(height: 16),
+                const SizedBox(height: 16),
 
-                    // Swap Button
-                    Center(
-                      child: GestureDetector(
-                        onTap: _swapCryptos,
-                        child: Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: AppColors.primary,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: AppColors.primary.withOpacity(0.3),
-                                blurRadius: 12,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          child: const Icon(
-                            Icons.swap_vert,
-                            color: Colors.white,
-                            size: 24,
-                          ),
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    // To Card
-                    _buildCryptoCard(
-                      label: 'To',
-                      crypto: _toCrypto,
-                      controller: _toAmountController,
-                      onTap: _selectToCrypto,
-                      isFrom: false,
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Exchange Rate Info
-                    Container(
-                      padding: const EdgeInsets.all(16),
+                // Swap Button
+                Center(
+                  child: GestureDetector(
+                    onTap: _swapCryptos,
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: AppColors.cardBackground,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Column(
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text(
-                                'Exchange Rate',
-                                style: TextStyle(
-                                  color: AppColors.textSecondary,
-                                  fontSize: 14,
-                                ),
-                              ),
-                              Text(
-                                '1 ${_fromCrypto.symbol} = ${_exchangeRate.toStringAsFixed(6)} ${_toCrypto.symbol}',
-                                style: const TextStyle(
-                                  color: AppColors.textPrimary,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text(
-                                'Network Fee',
-                                style: TextStyle(
-                                  color: AppColors.textSecondary,
-                                  fontSize: 14,
-                                ),
-                              ),
-                              Text(
-                                '$_networkFee ${_fromCrypto.symbol} (\$${(_networkFee * _fromCrypto.priceUSD).toStringAsFixed(2)})',
-                                style: const TextStyle(
-                                  color: AppColors.textPrimary,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
+                        color: AppColors.primary,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.primary.withOpacity(0.3),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
                           ),
                         ],
                       ),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Exchange Button
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _isCalculating ? null : _executeExchange,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primary,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          elevation: 0,
-                          disabledBackgroundColor: AppColors.primary.withOpacity(0.5),
-                        ),
-                        child: _isCalculating
-                            ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                            : const Text(
-                          'Exchange Now',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
+                      child: const Icon(
+                        Icons.swap_vert,
+                        color: Colors.white,
+                        size: 24,
                       ),
                     ),
-
-                    const SizedBox(height: 20),
-                  ],
+                  ),
                 ),
-              ),
+
+                const SizedBox(height: 16),
+
+                // To Card
+                _buildCryptoCard(
+                  label: 'To',
+                  crypto: _toCrypto!,
+                  controller: _toAmountController,
+                  onTap: _selectToCrypto,
+                  isFrom: false,
+                ),
+
+                const SizedBox(height: 24),
+
+                // Exchange Rate Info
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppColors.cardBackground,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Exchange Rate',
+                            style: TextStyle(
+                              color: AppColors.textSecondary,
+                              fontSize: 14,
+                            ),
+                          ),
+                          Text(
+                            '1 ${_fromCrypto!.symbol} = ${_exchangeRate.toStringAsFixed(6)} ${_toCrypto!.symbol}',
+                            style: const TextStyle(
+                              color: AppColors.textPrimary,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Network Fee',
+                            style: TextStyle(
+                              color: AppColors.textSecondary,
+                              fontSize: 14,
+                            ),
+                          ),
+                          Text(
+                            '$_networkFee ${_fromCrypto!.symbol} (\$${(_networkFee * _fromCrypto!.priceUSD).toStringAsFixed(2)})',
+                            style: const TextStyle(
+                              color: AppColors.textPrimary,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 24),
+
+                // Exchange Button
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _isCalculating ? null : _executeExchange,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 0,
+                      disabledBackgroundColor: AppColors.primary.withOpacity(0.5),
+                    ),
+                    child: _isCalculating
+                        ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                        : const Text(
+                      'Exchange Now',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+              ],
             ),
-          ],
+          ),
         ),
-      ),
-      // Update bagian bottomNavigationBar (ganti yang lama dengan ini)
-      // Update bottomNavigationBar - ganti dengan kode lengkap ini
-      bottomNavigationBar: CustomBottomNavBar(
-        currentIndex: _currentIndex,
-        onTap: (index) {
-          if (index == 0) {
-            // Navigate back to Home
-            Navigator.pop(context);
-          } else if (index == 1) {
-            // Navigate to Activity
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => const ActivityScreen(),
-              ),
-            );
-          } else if (index == 2) {
-            // Already on Exchange
-          } else if (index == 3) {
-            // Navigate to Discover
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => const DiscoverScreen(),
-              ),
-            );
-          } else if (index == 4) {
-            // Navigate to Profile
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => const ProfileScreen(),
-              ),
-            );
-          }
-        },
-      ),
+      ],
     );
   }
 
@@ -555,9 +729,14 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
               ),
               Text(
                 'Balance: ${crypto.balance.toStringAsFixed(4)}',
-                style: const TextStyle(
-                  color: AppColors.textSecondary,
+                style: TextStyle(
+                  color: crypto.balance > 0
+                      ? AppColors.green
+                      : AppColors.textSecondary,
                   fontSize: 12,
+                  fontWeight: crypto.balance > 0
+                      ? FontWeight.w600
+                      : FontWeight.normal,
                 ),
               ),
             ],
@@ -579,23 +758,15 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
                   ),
                   child: Row(
                     children: [
-                      Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: _getIconColor(crypto.symbol),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Center(
-                          child: Text(
-                            crypto.icon,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
+                      if (crypto.imageUrl != null)
+                        Image.network(
+                          crypto.imageUrl!,
+                          width: 32,
+                          height: 32,
+                          errorBuilder: (_, __, ___) => _buildIconFallback(crypto),
+                        )
+                      else
+                        _buildIconFallback(crypto),
                       const SizedBox(width: 8),
                       Text(
                         crypto.symbol,
@@ -654,6 +825,26 @@ class _ExchangeScreenState extends State<ExchangeScreen> {
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildIconFallback(ExchangePair crypto) {
+    return Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        color: _getIconColor(crypto.symbol),
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: Text(
+          crypto.icon,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
       ),
     );
   }

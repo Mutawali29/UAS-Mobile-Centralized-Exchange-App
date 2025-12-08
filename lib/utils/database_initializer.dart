@@ -12,6 +12,7 @@ class DatabaseInitializer {
     try {
       final user = _auth.currentUser;
       if (user == null) {
+        print('❌ Initialization failed: User not logged in');
         return {
           'success': false,
           'message': 'User not logged in!',
@@ -32,8 +33,14 @@ class DatabaseInitializer {
         'success': true,
         'message': 'Database initialized successfully!',
       };
+    } on FirebaseException catch (e) {
+      print('❌ Firebase error during initialization: ${e.code} - ${e.message}');
+      return {
+        'success': false,
+        'message': 'Firebase error: ${e.message}',
+      };
     } catch (e) {
-      print('❌ Error during initialization: $e');
+      print('❌ Unexpected error during initialization: ${e.toString()}');
       return {
         'success': false,
         'message': 'Error: ${e.toString()}',
@@ -43,26 +50,47 @@ class DatabaseInitializer {
 
   Future<void> _initializeWalletAddress(String userId) async {
     try {
+      print('📍 Initializing wallet address for user: $userId');
+
       final userDoc = await _firestore.collection('users').doc(userId).get();
+
+      if (!userDoc.exists) {
+        print('   Creating new user document...');
+        final walletAddress = _generateWalletAddress();
+        await _firestore.collection('users').doc(userId).set({
+          'walletAddress': walletAddress,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+        print('✅ User document created with wallet: $walletAddress');
+        return;
+      }
+
       final data = userDoc.data();
 
       if (data?['walletAddress'] == null || data!['walletAddress'].isEmpty) {
+        print('   Wallet address missing, generating new one...');
         final walletAddress = _generateWalletAddress();
         await _firestore.collection('users').doc(userId).update({
           'walletAddress': walletAddress,
+          'updatedAt': FieldValue.serverTimestamp(),
         });
         print('✅ Wallet address created: $walletAddress');
       } else {
-        print('ℹ️ Wallet address already exists: ${data['walletAddress']}');
+        print('ℹ️  Wallet address already exists: ${data['walletAddress']}');
       }
+    } on FirebaseException catch (e) {
+      print('❌ Firebase error initializing wallet: ${e.code} - ${e.message}');
+      rethrow;
     } catch (e) {
-      print('❌ Error initializing wallet address: $e');
+      print('❌ Error initializing wallet address: ${e.toString()}');
       rethrow;
     }
   }
 
   Future<void> _initializePortfolio(String userId) async {
     try {
+      print('📦 Initializing portfolio for user: $userId');
+
       // Check if portfolio already exists
       final portfolioSnapshot = await _firestore
           .collection('users')
@@ -72,11 +100,11 @@ class DatabaseInitializer {
           .get();
 
       if (portfolioSnapshot.docs.isNotEmpty) {
-        print('ℹ️ Portfolio already exists, skipping...');
+        print('ℹ️  Portfolio already exists, skipping initialization...');
         return;
       }
 
-      print('📦 Creating portfolio...');
+      print('   Creating portfolio with default assets...');
 
       // Add Bitcoin
       await _firestore
@@ -118,8 +146,11 @@ class DatabaseInitializer {
       print('  ✅ Ripple added: 4.0 XRP');
 
       print('✅ Portfolio created successfully!');
+    } on FirebaseException catch (e) {
+      print('❌ Firebase error initializing portfolio: ${e.code} - ${e.message}');
+      rethrow;
     } catch (e) {
-      print('❌ Error initializing portfolio: $e');
+      print('❌ Error initializing portfolio: ${e.toString()}');
       rethrow;
     }
   }
@@ -127,14 +158,19 @@ class DatabaseInitializer {
   String _generateWalletAddress() {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final random = (timestamp % 1000000).toString().padLeft(6, '0');
-    return '0x19a15446affabcd1234$random';
+    final address = '0x19a15446affabcd1234$random';
+    print('🔑 Generated wallet address: $address');
+    return address;
   }
 
   // Check status database
   Future<Map<String, dynamic>> checkDatabaseStatus() async {
     try {
+      print('🔍 Checking database status...');
+
       final user = _auth.currentUser;
       if (user == null) {
+        print('⚠️  No user logged in');
         return {
           'hasWallet': false,
           'hasPortfolio': false,
@@ -143,10 +179,12 @@ class DatabaseInitializer {
       }
 
       final userId = user.uid;
+      print('   Checking status for user: $userId');
 
       // Check wallet
       final userDoc = await _firestore.collection('users').doc(userId).get();
-      final hasWallet = userDoc.data()?['walletAddress'] != null;
+      final hasWallet = userDoc.exists && userDoc.data()?['walletAddress'] != null;
+      print('   Wallet status: ${hasWallet ? "✅ Exists" : "❌ Missing"}');
 
       // Check portfolio
       final portfolioSnapshot = await _firestore
@@ -156,19 +194,33 @@ class DatabaseInitializer {
           .get();
       final hasPortfolio = portfolioSnapshot.docs.isNotEmpty;
       final portfolioCount = portfolioSnapshot.docs.length;
+      print('   Portfolio status: ${hasPortfolio ? "✅ Exists ($portfolioCount assets)" : "❌ Empty"}');
 
-      return {
+      final status = {
         'hasWallet': hasWallet,
         'hasPortfolio': hasPortfolio,
         'portfolioCount': portfolioCount,
         'walletAddress': userDoc.data()?['walletAddress'],
       };
-    } catch (e) {
-      print('Error checking database status: $e');
+
+      print('✅ Database status check completed');
+      return status;
+
+    } on FirebaseException catch (e) {
+      print('❌ Firebase error checking status: ${e.code} - ${e.message}');
       return {
         'hasWallet': false,
         'hasPortfolio': false,
         'portfolioCount': 0,
+        'error': e.message,
+      };
+    } catch (e) {
+      print('❌ Error checking database status: ${e.toString()}');
+      return {
+        'hasWallet': false,
+        'hasPortfolio': false,
+        'portfolioCount': 0,
+        'error': e.toString(),
       };
     }
   }
@@ -191,33 +243,84 @@ class _DatabaseInitializerWidgetState extends State<DatabaseInitializerWidget> {
   @override
   void initState() {
     super.initState();
+    print('🔧 DatabaseInitializerWidget initialized');
     _checkStatus();
   }
 
+  @override
+  void dispose() {
+    print('🧹 DatabaseInitializerWidget disposed');
+    super.dispose();
+  }
+
   Future<void> _checkStatus() async {
+    if (!mounted) return;
+
+    print('📊 Checking database status...');
+
     setState(() {
       _isChecking = true;
     });
 
-    final status = await _initializer.checkDatabaseStatus();
+    try {
+      final status = await _initializer.checkDatabaseStatus();
 
-    setState(() {
-      _status = status;
-      _isChecking = false;
-    });
+      if (!mounted) return;
+
+      setState(() {
+        _status = status;
+        _isChecking = false;
+      });
+
+      print('✅ Status check completed: ${_status.toString()}');
+    } catch (e) {
+      print('❌ Error in _checkStatus: ${e.toString()}');
+
+      if (!mounted) return;
+
+      setState(() {
+        _status = {
+          'hasWallet': false,
+          'hasPortfolio': false,
+          'portfolioCount': 0,
+          'error': e.toString(),
+        };
+        _isChecking = false;
+      });
+    }
   }
 
   Future<void> _initialize() async {
+    if (!mounted) return;
+
+    print('🚀 Starting database initialization...');
+
     setState(() {
       _isLoading = true;
     });
 
-    final result = await _initializer.initializeUserData();
+    try {
+      final result = await _initializer.initializeUserData();
 
-    if (mounted) {
+      if (!mounted) return;
+
+      print('📢 Initialization result: ${result.toString()}');
+
+      // Show snackbar with result
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(result['message']),
+          content: Row(
+            children: [
+              Icon(
+                result['success'] ? Icons.check_circle : Icons.error,
+                color: Colors.white,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(result['message']),
+              ),
+            ],
+          ),
           backgroundColor: result['success'] ? AppColors.green : AppColors.red,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(
@@ -228,27 +331,78 @@ class _DatabaseInitializerWidgetState extends State<DatabaseInitializerWidget> {
       );
 
       if (result['success']) {
-        // Refresh status
+        // Refresh status after successful initialization
         await _checkStatus();
       }
-    }
+    } catch (e) {
+      print('❌ Error in _initialize: ${e.toString()}');
 
-    setState(() {
-      _isLoading = false;
-    });
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.error, color: Colors.white),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text('Error: ${e.toString()}'),
+              ),
+            ],
+          ),
+          backgroundColor: AppColors.red,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     if (_isChecking) {
-      return const Center(
-        child: CircularProgressIndicator(color: AppColors.primary),
+      return Container(
+        margin: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: AppColors.cardBackground,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: Colors.white.withOpacity(0.1),
+          ),
+        ),
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: AppColors.primary),
+              SizedBox(height: 12),
+              Text(
+                'Checking database status...',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
       );
     }
 
     final hasWallet = _status?['hasWallet'] ?? false;
     final hasPortfolio = _status?['hasPortfolio'] ?? false;
     final portfolioCount = _status?['portfolioCount'] ?? 0;
+    final hasError = _status?['error'] != null;
 
     return Container(
       margin: const EdgeInsets.all(20),
@@ -266,8 +420,16 @@ class _DatabaseInitializerWidgetState extends State<DatabaseInitializerWidget> {
           Row(
             children: [
               Icon(
-                hasWallet && hasPortfolio ? Icons.check_circle : Icons.warning,
-                color: hasWallet && hasPortfolio ? AppColors.green : AppColors.orange,
+                hasError
+                    ? Icons.error
+                    : (hasWallet && hasPortfolio)
+                    ? Icons.check_circle
+                    : Icons.warning,
+                color: hasError
+                    ? AppColors.red
+                    : (hasWallet && hasPortfolio)
+                    ? AppColors.green
+                    : AppColors.orange,
               ),
               const SizedBox(width: 12),
               const Text(
@@ -281,6 +443,39 @@ class _DatabaseInitializerWidgetState extends State<DatabaseInitializerWidget> {
             ],
           ),
           const SizedBox(height: 16),
+
+          if (hasError) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.red.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: AppColors.red.withOpacity(0.3),
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.error_outline,
+                    color: AppColors.red,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Error: ${_status!['error']}',
+                      style: const TextStyle(
+                        color: AppColors.red,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
 
           _buildStatusItem(
             'Wallet Address',
@@ -299,7 +494,9 @@ class _DatabaseInitializerWidgetState extends State<DatabaseInitializerWidget> {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: _isLoading || (hasWallet && hasPortfolio) ? null : _initialize,
+              onPressed: _isLoading || (hasWallet && hasPortfolio && !hasError)
+                  ? null
+                  : _initialize,
               icon: _isLoading
                   ? const SizedBox(
                 width: 20,
@@ -310,18 +507,24 @@ class _DatabaseInitializerWidgetState extends State<DatabaseInitializerWidget> {
                 ),
               )
                   : Icon(
-                hasWallet && hasPortfolio ? Icons.check : Icons.rocket_launch,
+                (hasWallet && hasPortfolio && !hasError)
+                    ? Icons.check
+                    : Icons.rocket_launch,
               ),
               label: Text(
                 _isLoading
                     ? 'Initializing...'
-                    : hasWallet && hasPortfolio
+                    : (hasWallet && hasPortfolio && !hasError)
                     ? 'Already Initialized ✓'
+                    : hasError
+                    ? 'Retry Initialization'
                     : 'Initialize Database',
               ),
               style: ElevatedButton.styleFrom(
-                backgroundColor: hasWallet && hasPortfolio
+                backgroundColor: (hasWallet && hasPortfolio && !hasError)
                     ? AppColors.green.withOpacity(0.3)
+                    : hasError
+                    ? AppColors.orange
                     : AppColors.primary,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 16),
@@ -332,10 +535,10 @@ class _DatabaseInitializerWidgetState extends State<DatabaseInitializerWidget> {
             ),
           ),
 
-          if (hasWallet && hasPortfolio) ...[
+          if (hasWallet || hasPortfolio || hasError) ...[
             const SizedBox(height: 12),
             TextButton.icon(
-              onPressed: _checkStatus,
+              onPressed: _isLoading ? null : _checkStatus,
               icon: const Icon(Icons.refresh, size: 18),
               label: const Text('Refresh Status'),
               style: TextButton.styleFrom(
