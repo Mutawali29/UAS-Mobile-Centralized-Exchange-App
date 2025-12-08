@@ -779,6 +779,8 @@ class AppColors {
 
 ### CoinGecko API
 
+### CryptoCompare News API
+
 #### Endpoints Used
 ```dart
 // 1. Market Data
