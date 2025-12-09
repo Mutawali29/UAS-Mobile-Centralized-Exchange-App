@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import '../models/news_article.dart';
 import '../widgets/news_card.dart';
 import '../widgets/trending_crypto_card.dart';
@@ -31,10 +33,15 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   // Trending cryptos dari API
   List<TrendingCrypto> _trendingCryptos = [];
 
+  // News articles dari API
+  List<NewsArticle> _allNews = [];
+
   // State variables untuk error handling
   String? _trendingError;
+  String? _newsError;
   bool _hasNetworkError = false;
   bool _isRateLimited = false;
+  bool _hasNewsNetworkError = false;
 
   // Search variables
   final TextEditingController _searchController = TextEditingController();
@@ -42,82 +49,12 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   String _searchQuery = '';
   Timer? _debounce;
 
-  // Sample news articles
-  final List<NewsArticle> _allNews = [
-    NewsArticle(
-      id: '1',
-      title: 'Bitcoin Surges Past \$80K as Institutional Adoption Grows',
-      description:
-      'Major financial institutions continue to add Bitcoin to their portfolios, driving prices to new highs.',
-      imageUrl: 'https://picsum.photos/seed/crypto1/800/400',
-      source: 'CryptoNews',
-      publishedAt: DateTime.now().subtract(const Duration(hours: 2)),
-      url: 'https://example.com/news1',
-      category: 'Market',
-    ),
-    NewsArticle(
-      id: '2',
-      title: 'Ethereum 2.0 Update: What You Need to Know',
-      description:
-      'The latest developments in Ethereum\'s transition to proof-of-stake and its impact on the ecosystem.',
-      imageUrl: 'https://picsum.photos/seed/crypto2/800/400',
-      source: 'BlockchainToday',
-      publishedAt: DateTime.now().subtract(const Duration(hours: 5)),
-      url: 'https://example.com/news2',
-      category: 'Technology',
-    ),
-    NewsArticle(
-      id: '3',
-      title: 'New Regulations Coming for Cryptocurrency Exchanges',
-      description:
-      'Government agencies announce new framework for crypto trading platforms.',
-      imageUrl: 'https://picsum.photos/seed/crypto3/800/400',
-      source: 'FinanceDaily',
-      publishedAt: DateTime.now().subtract(const Duration(hours: 8)),
-      url: 'https://example.com/news3',
-      category: 'Regulation',
-    ),
-    NewsArticle(
-      id: '4',
-      title: 'DeFi Protocols See Record Trading Volume',
-      description:
-      'Decentralized finance platforms report unprecedented growth in user activity.',
-      imageUrl: 'https://picsum.photos/seed/crypto4/800/400',
-      source: 'DeFi Insider',
-      publishedAt: DateTime.now().subtract(const Duration(days: 1)),
-      url: 'https://example.com/news4',
-      category: 'DeFi',
-    ),
-    NewsArticle(
-      id: '5',
-      title: 'NFT Market Shows Signs of Recovery',
-      description:
-      'Trading volumes for non-fungible tokens increase as new projects launch.',
-      imageUrl: 'https://picsum.photos/seed/crypto5/800/400',
-      source: 'NFT Weekly',
-      publishedAt: DateTime.now().subtract(const Duration(days: 1)),
-      url: 'https://example.com/news5',
-      category: 'NFT',
-    ),
-    NewsArticle(
-      id: '6',
-      title: 'Top 5 Altcoins to Watch This Week',
-      description:
-      'Market analysts highlight promising cryptocurrencies with strong fundamentals.',
-      imageUrl: 'https://picsum.photos/seed/crypto6/800/400',
-      source: 'AltcoinBuzz',
-      publishedAt: DateTime.now().subtract(const Duration(days: 2)),
-      url: 'https://example.com/news6',
-      category: 'Analysis',
-    ),
-  ];
-
   final List<String> _categories = [
     'All',
-    'Market',
+    'Bitcoin',
+    'Ethereum',
     'Technology',
-    'DeFi',
-    'NFT',
+    'Market',
     'Regulation'
   ];
 
@@ -234,6 +171,122 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     }
   }
 
+  Future<void> _loadNews() async {
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = true;
+      _newsError = null;
+      _hasNewsNetworkError = false;
+    });
+
+    debugPrint('');
+    debugPrint('═══════════════════════════════════════════════════════');
+    debugPrint('📰 [DiscoverScreen] Loading crypto news...');
+    debugPrint('═══════════════════════════════════════════════════════');
+
+    try {
+      // Menggunakan CryptoCompare News API (Free, No API Key Required)
+      final response = await http.get(
+        Uri.parse('https://min-api.cryptocompare.com/data/v2/news/?lang=EN'),
+      ).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          throw TimeoutException('Connection timeout');
+        },
+      );
+
+      debugPrint('News API Response Status: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final List<dynamic> newsData = data['Data'] ?? [];
+
+        debugPrint('Raw news count: ${newsData.length}');
+
+        final List<NewsArticle> loadedNews = [];
+
+        for (var item in newsData) {
+          try {
+            // Parse category dari tags
+            String category = 'Market';
+            final tags = item['tags']?.toString().toLowerCase() ?? '';
+            if (tags.contains('bitcoin') || tags.contains('btc')) {
+              category = 'Bitcoin';
+            } else if (tags.contains('ethereum') || tags.contains('eth')) {
+              category = 'Ethereum';
+            } else if (tags.contains('defi')) {
+              category = 'Technology';
+            } else if (tags.contains('regulation')) {
+              category = 'Regulation';
+            }
+
+            final article = NewsArticle(
+              id: item['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
+              title: item['title'] ?? 'No Title',
+              description: item['body'] ?? 'No description available',
+              imageUrl: item['imageurl'] ?? 'https://picsum.photos/seed/${item['id']}/800/400',
+              source: item['source_info']?['name'] ?? item['source'] ?? 'Unknown',
+              publishedAt: DateTime.fromMillisecondsSinceEpoch(
+                (item['published_on'] ?? 0) * 1000,
+              ),
+              url: item['url'] ?? item['guid'] ?? '',
+              category: category,
+            );
+
+            loadedNews.add(article);
+          } catch (e) {
+            debugPrint('Error parsing article: $e');
+            continue;
+          }
+        }
+
+        if (mounted) {
+          setState(() {
+            _allNews = loadedNews;
+            _isLoading = false;
+            _newsError = null;
+          });
+
+          debugPrint('');
+          debugPrint('✅ [DiscoverScreen] Successfully loaded ${loadedNews.length} news articles');
+          debugPrint('═══════════════════════════════════════════════════════');
+        }
+      } else {
+        throw Exception('Failed to load news: ${response.statusCode}');
+      }
+    } on TimeoutException {
+      debugPrint('');
+      debugPrint('⏱️ [DiscoverScreen] News API timeout');
+      debugPrint('   Suggestion: Check your internet connection');
+      debugPrint('═══════════════════════════════════════════════════════');
+
+      if (mounted) {
+        setState(() {
+          _allNews = [];
+          _isLoading = false;
+          _newsError = 'Connection timeout. Please try again.';
+          _hasNewsNetworkError = true;
+        });
+      }
+    } catch (e) {
+      debugPrint('');
+      debugPrint('❌ [DiscoverScreen] Failed to load news');
+      debugPrint('   Error: $e');
+      debugPrint('═══════════════════════════════════════════════════════');
+
+      if (mounted) {
+        setState(() {
+          _allNews = [];
+          _isLoading = false;
+          _newsError = 'Failed to load news. Please try again.';
+          _hasNewsNetworkError = e.toString().contains('SocketException') ||
+              e.toString().contains('NetworkException');
+        });
+      }
+    }
+  }
+
   void _showErrorSnackbar(String message, {bool isWarning = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -272,20 +325,6 @@ class _DiscoverScreenState extends State<DiscoverScreen>
         ),
       ),
     );
-  }
-
-  Future<void> _loadNews() async {
-    setState(() {
-      _isLoading = true;
-    });
-
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
-    }
   }
 
   List<NewsArticle> get _filteredNews {
@@ -800,6 +839,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
   Widget _buildEmptyState() {
     final bool isSearching = _searchQuery.isNotEmpty;
+    final bool hasError = _newsError != null;
 
     return Center(
       child: Column(
@@ -816,14 +856,20 @@ class _DiscoverScreenState extends State<DiscoverScreen>
               ),
             ),
             child: Icon(
-              isSearching ? Icons.search_off : Icons.article_outlined,
+              hasError
+                  ? (_hasNewsNetworkError ? Icons.wifi_off_rounded : Icons.error_outline)
+                  : (isSearching ? Icons.search_off : Icons.article_outlined),
               size: 64,
-              color: AppColors.textSecondary.withOpacity(0.5),
+              color: hasError
+                  ? (_hasNewsNetworkError ? Colors.orange : AppColors.red)
+                  : AppColors.textSecondary.withOpacity(0.5),
             ),
           ),
           const SizedBox(height: 20),
           Text(
-            isSearching ? 'No results found' : 'No news available',
+            hasError
+                ? (_hasNewsNetworkError ? 'No Internet Connection' : 'Failed to Load News')
+                : (isSearching ? 'No results found' : 'No news available'),
             style: const TextStyle(
               color: AppColors.textPrimary,
               fontSize: 18,
@@ -831,17 +877,47 @@ class _DiscoverScreenState extends State<DiscoverScreen>
             ),
           ),
           const SizedBox(height: 8),
-          Text(
-            isSearching
-                ? 'Try searching with different keywords'
-                : 'Check back later for updates',
-            style: const TextStyle(
-              color: AppColors.textSecondary,
-              fontSize: 14,
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 40),
+            child: Text(
+              hasError
+                  ? _newsError!
+                  : (isSearching
+                  ? 'Try searching with different keywords'
+                  : 'Check back later for updates'),
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 14,
+              ),
+              textAlign: TextAlign.center,
             ),
           ),
-          if (isSearching) ...[
-            const SizedBox(height: 16),
+          const SizedBox(height: 20),
+          if (hasError)
+            ElevatedButton.icon(
+              onPressed: _loadNews,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 0,
+              ),
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text(
+                'Retry',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+              ),
+            )
+          else if (isSearching)
             TextButton.icon(
               onPressed: () {
                 _searchController.clear();
@@ -873,7 +949,6 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                 ),
               ),
             ),
-          ],
         ],
       ),
     );
@@ -895,12 +970,63 @@ class _DiscoverScreenState extends State<DiscoverScreen>
             fontSize: 18,
           ),
         ),
-        content: Text(
-          article.description,
-          style: const TextStyle(
-            color: AppColors.textSecondary,
-            fontSize: 15,
-            height: 1.5,
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (article.imageUrl.isNotEmpty)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.network(
+                    article.imageUrl,
+                    height: 150,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        height: 150,
+                        color: AppColors.background,
+                        child: const Icon(
+                          Icons.image_not_supported,
+                          color: AppColors.textSecondary,
+                          size: 40,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              const SizedBox(height: 16),
+              Text(
+                article.description.length > 300
+                    ? '${article.description.substring(0, 300)}...'
+                    : article.description,
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 15,
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Icon(
+                    Icons.source,
+                    size: 14,
+                    color: AppColors.textSecondary.withOpacity(0.6),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    article.source,
+                    style: TextStyle(
+                      color: AppColors.textSecondary.withOpacity(0.8),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
         actions: [
@@ -921,6 +1047,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
             onPressed: () {
               Navigator.pop(context);
               // TODO: Open URL in browser
+              // You can use url_launcher package: launchUrl(Uri.parse(article.url))
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
