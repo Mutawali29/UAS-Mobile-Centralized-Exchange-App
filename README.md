@@ -779,8 +779,6 @@ class AppColors {
 
 ### CoinGecko API
 
-### CryptoCompare News API
-
 #### Endpoints Used
 ```dart
 // 1. Market Data
@@ -795,6 +793,21 @@ GET /search/trending
 
 // 3. Single Coin Details
 GET /coins/markets?ids={coinId}
+```
+
+### CryptoCompare News API
+
+#### Endpoints Used
+```dart
+GET /news/
+    ?lang=EN
+    &feeds={news_sources}         // Optional: coindesk,cointelegraph
+    &categories={categories}      // Optional: BTC,ETH,Trading,Regulation
+    &excludeCategories={exclude}  // Optional: categories to exclude
+
+GET /news/feeds
+
+GET /news/categories
 ```
 
 #### Response Handling
