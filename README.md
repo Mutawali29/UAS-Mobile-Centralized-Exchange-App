@@ -775,6 +775,69 @@ class AppColors {
 
 ---
 
+# State Management Documentation
+
+## ✅ Implementasi State Management
+
+Aplikasi ini menggunakan **Provider Pattern** dengan `ChangeNotifier` untuk state management yang terstruktur dan maintainable.
+
+---
+
+## 1. Menggunakan Provider Pattern
+
+```dart
+class HomeScreenProvider extends ChangeNotifier {
+  // Business logic terpisah dari UI
+}
+```
+
+Menggunakan `ChangeNotifier` yang merupakan bagian dari Provider pattern.
+
+---
+
+## 2. Pemisahan Business Logic dari UI
+
+- **Business Logic**: Semua ada di `HomeScreenProvider` (data fetching, error handling, state management)
+- **UI Logic**: Ada di `_HomeScreenState` (tampilan, navigation, user interaction)
+
+---
+
+## 3. State Management Terstruktur Rapi
+
+```dart
+// State Variables (jelas dan terorganisir)
+List<CryptoAsset> _cryptoAssets = [];
+bool _isLoading = true;
+AppError? _currentError;
+
+// Methods terpisah per fungsi
+Future<void> _loadCryptoData() async { }
+void _trackError(AppError error) { }
+void _resetErrorTracking() { }
+```
+
+---
+
+## 4. Reactive Updates dengan notifyListeners()
+
+```dart
+_cryptoAssets = updatedAssets;
+_isLoading = false;
+notifyListeners(); // ✅ Update UI otomatis
+```
+
+---
+
+## 🎯 Kelebihan Implementasi
+
+1. **Separation of Concerns** - Logic dan UI terpisah sempurna
+2. **Error Handling** - Terstruktur dengan enum ErrorType dan class AppError
+3. **Logging System** - Ada `_logInfo()`, `_logSuccess()`, `_logError()`
+4. **Auto-refresh** - Timer untuk update data otomatis
+5. **Stream Subscription** - Portfolio stream untuk real-time updates
+6. **Rate Limiting** - Ada mekanisme cooldown untuk API calls
+
+
 ## 🔄 API Integration
 
 ### CoinGecko API
