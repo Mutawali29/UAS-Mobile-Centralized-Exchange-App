@@ -836,6 +836,117 @@ Future<List<CryptoAsset>> fetchCryptoAssets({int limit = 20}) async {
 
 ---
 
+# CryptoCompare News API Documentation
+
+## ⚠️ Error Handling
+
+### Error Types
+
+| Type | Status | Error Flag | Message | Action |
+|------|--------|------------|---------|--------|
+| **Network Error** | - | `_hasNewsNetworkError = true` | "No internet connection" | Show retry button |
+| **Timeout** | - | `_newsError` | "Connection timeout" | Show retry button |
+| **Rate Limit** | 429 | `_isRateLimited = true` | "Too many requests" | Disable retry button |
+| **API Error** | 4xx/5xx | `_newsError` | "Failed to load news" | Show retry button |
+
+### Implementation
+
+```dart
+try {
+  final response = await http.get(uri).timeout(Duration(seconds: 10));
+  
+  if (response.statusCode == 200) {
+    // ✅ Success
+    _allNews = parseNewsData(response.body);
+    _newsError = null;
+    
+  } else if (response.statusCode == 429) {
+    // ⏳ Rate Limited
+    _isRateLimited = true;
+    _newsError = "Too many requests. Please wait.";
+    
+  } else {
+    // ❌ API Error
+    _newsError = "Failed to load news: HTTP ${response.statusCode}";
+  }
+  
+} on TimeoutException {
+  // ⏱️ Timeout
+  _newsError = "Connection timeout. Please try again.";
+  
+} on SocketException {
+  // 🔌 Network Error
+  _hasNewsNetworkError = true;
+  _newsError = "No internet connection. Check your network.";
+  
+} catch (e) {
+  // ⚠️ Unknown Error
+  _newsError = "An unexpected error occurred.";
+}
+```
+
+### UI States
+
+```dart
+// Empty State with Error
+Widget _buildEmptyState() {
+  if (_hasNewsNetworkError) {
+    return ErrorWidget(
+      icon: Icons.wifi_off_rounded,
+      title: "No Internet Connection",
+      subtitle: _newsError,
+      onRetry: _loadNews,
+    );
+  }
+  
+  if (_isRateLimited) {
+    return ErrorWidget(
+      icon: Icons.hourglass_empty_rounded,
+      title: "Too Many Requests",
+      subtitle: _newsError,
+      onRetry: null, // Disabled
+    );
+  }
+  
+  if (_newsError != null) {
+    return ErrorWidget(
+      icon: Icons.error_outline_rounded,
+      title: "Failed to Load",
+      subtitle: _newsError,
+      onRetry: _loadNews,
+    );
+  }
+  
+  return EmptyWidget();
+}
+```
+
+---
+
+## 📊 Response Format
+
+```json
+{
+  "Response": "Success",
+  "Data": [
+    {
+      "id": "123456789",
+      "title": "Bitcoin Surges Past $80K",
+      "body": "Article description...",
+      "imageurl": "https://...",
+      "source": "coindesk",
+      "source_info": {
+        "name": "CoinDesk"
+      },
+      "published_on": 1702123456,
+      "tags": "BTC|Bitcoin|Trading",
+      "categories": "BTC|Market",
+      "url": "https://..."
+    }
+  ]
+}
+```
+
 ## 🧪 Testing
 
 ### Unit Tests (Coming Soon)
